@@ -1,0 +1,66 @@
+# Variables
+@url = 
+@api = http://0.0.0.0:8080/api
+@name = Jericho Aquino
+@email = yeoligoakino@gmail.com
+@phone = +639206080487
+@user = eru123
+@pass = !P4s5W04d~
+@token = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJfaWQiOiI2MTE3ZTZlNmZjMjMxYTA4ODg2NjU4YTIiLCJuYW1lIjoiSmVyaWNobyBBcXVpbm8iLCJ1c2VyIjoiZXJ1MTIzIiwiaWF0IjoxNjI5ODg1MDE5fQ.EzyNQFrxV4I_bcQTjrnhShZ_FU_WWUPKJobWOjiq_2c
+@id = 6117e6e6fc231a08886658a2
+
+### Create User
+POST {{api}}/auth/register
+Content-Type: application/json
+
+{
+  "name": "{{name}}",
+  "email": "{{email}}",
+  "phone": "{{phone}}",
+  "pass": "{{pass}}",
+  "user": "{{user}}"
+}
+
+### Login
+POST {{api}}/auth/login
+Content-Type: application/json
+
+{
+  "user": "{{user}}",
+  "pass": "{{pass}}"
+}
+
+### Read User by token
+GET {{api}}/user
+Authorization: Bearer {{token}}
+
+### Read User By Username
+GET {{api}}/user/@{{user}}
+Authorization: Bearer {{token}}
+
+### Read user by id
+GET {{api}}/user/${{id}}
+Authorization: Bearer {{token}}
+
+### GET users
+GET {{api}}/users/1/100
+Authorization: Bearer {{token}}
+
+### UPDATE user
+PUT {{api}}/user
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "user": "eru123",
+  "pass": "{{pass}}"
+}
+### DELETE user
+DELETE {{api}}/user
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "user": "eru123",
+  "pass": "{{pass}}"
+}

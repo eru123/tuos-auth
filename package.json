@@ -1,0 +1,20 @@
+{
+  "name": "tuos-auth",
+  "version": "1.0.0",
+  "description": "Tuos authentication plugin",
+  "main": "index.js",
+  "repository": "https://github.com/eru123/tuos-auth",
+  "author": "eru123 <yeoligoakino@gmail.com>",
+  "license": "Apache-2.0",
+  "private": false,
+  "dependencies": {
+    "bcrypt": "^5.0.1",
+    "fastify-jwt": "^3.0.1",
+    "fastify-plugin": "^3.0.0",
+    "joi": "^17.4.2",
+    "joi-password-complexity": "^5.1.0",
+    "joi-phone-number": "^5.0.1",
+    "lodash": "^4.17.21",
+    "tuos-tera": "^1.0.6"
+  }
+}
