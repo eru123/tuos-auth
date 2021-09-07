@@ -660,10 +660,10 @@ toidentifier@1.0.0:
   resolved "https://registry.yarnpkg.com/toidentifier/-/toidentifier-1.0.0.tgz#7e1be3470f1e77948bc43d94a3c8f4d7752ba553"
   integrity sha512-yaOH/Pk/VEhBWWTlhI+qXxDFXlejDGcQipMlyxda9nthulaxLZUNcUqFxokp0vcYnvteJln5FNQDRrxj3YcbVw==
 
-tuos-tera@^1.0.6:
-  version "1.0.6"
-  resolved "https://registry.yarnpkg.com/tuos-tera/-/tuos-tera-1.0.6.tgz#301e9f090e2218f9e3bdfb47f65b404433ee4ff4"
-  integrity sha512-qMGKrz2BBjJy3jOf9oHFVh1wODkXqZ4pd49seBCL+pPqxPwO9jovdkDZnNEKKmprBWgfejDuODkeVkrGRTBI5A==
+tuos-tera@^1.0.7:
+  version "1.0.7"
+  resolved "https://registry.yarnpkg.com/tuos-tera/-/tuos-tera-1.0.7.tgz#af4c62575a5499c6690f84625a4139e5ee5538e5"
+  integrity sha512-wqR4InZOy5fxzflPBz0LQqu7Pp9lVRVCK4+BolSt7xSmgQvk+FkVjjsS6z7htYrT3c8DxdMHqW/X+c3X3N8dAQ==
   dependencies:
     auto-load "^3.0.4"
     fastify-plugin "^3.0.0"
