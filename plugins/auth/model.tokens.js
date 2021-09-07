@@ -1,4 +1,3 @@
-const paginate = require('mongoose-paginate-v2')
 module.exports = function(fastify){
   const mongoose = fastify.mongoose
   const TokensSchema = new mongoose.Schema({
@@ -9,7 +8,5 @@ module.exports = function(fastify){
     created_at: Number,
     updated_at: Number
   }, { timestamp: true })
-
-  TokensSchema.plugin(paginate)
   return mongoose.model('Tokens', TokensSchema)
 }
