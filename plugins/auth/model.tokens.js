@@ -1,4 +1,4 @@
-module.exports = function(fastify){
+module.exports = function (fastify) {
   const mongoose = fastify.mongoose
   const TokensSchema = new mongoose.Schema({
     token: { type: String, required: true, unique: true },

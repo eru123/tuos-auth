@@ -1,14 +1,14 @@
 const fp = require('fastify-plugin')
 
-const plugin = async function(fastify, opts, done) {
-  Tokens = fastify.mongoose.models.Tokens
+const plugin = async function (fastify, opts, done) {
+  const Tokens = fastify.mongoose.models.Tokens
 
   const defaultOpts = { secret_token: 'default_secret_token' }
   const options = opts.jwt || defaultOpts
-  const {secret_token} = options
+  const { secretToken } = options
 
-  await fastify.register(require('fastify-jwt'), {secret: secret_token})
-  
+  await fastify.register(require('fastify-jwt'), { secret: secretToken })
+
   fastify.decorateRequest('authenticated', false)
   fastify.decorateRequest('token', null)
 
@@ -35,12 +35,11 @@ const plugin = async function(fastify, opts, done) {
   await fastify.addHook('preValidation', prepareAuth)
 
   const authenticate = async (req, res) => {
-    if (!req.authenticated && !res.sent) 
-      return res.status(401).send({ type: 'error', message: 'Unauthorized' })
+    if (!req.authenticated && !res.sent) { return res.status(401).send({ type: 'error', message: 'Unauthorized' }) }
   }
 
-  if(!('auth' in fastify)) fastify.decorate('auth', authenticate)
-  if(!('prepareAuth' in fastify)) fastify.decorate('prepareAuth', prepareAuth)
+  if (!('auth' in fastify)) fastify.decorate('auth', authenticate)
+  if (!('prepareAuth' in fastify)) fastify.decorate('prepareAuth', prepareAuth)
 
   done()
 }

@@ -4,7 +4,7 @@ const Phone = Joi.extend(require('joi-phone-number'))
 const bcrypt = require('bcrypt')
 const passwordComplexity = require('joi-password-complexity')
 
-const handler = function(fastify){
+const handler = function (fastify) {
   const Users = fastify.mongoose.models.Users
   const Tokens = fastify.mongoose.models.Tokens
 
@@ -85,7 +85,7 @@ const handler = function(fastify){
       user: Joi.string().alphanum().min(3).max(30).required(),
       email: Joi.string().email().required(),
       pass: passwordComplexity(complexityOptions).required(),
-      phone: Phone.string().phoneNumber(),
+      phone: Phone.string().phoneNumber()
     })
     return schema.validate(user)
   }
@@ -98,7 +98,7 @@ const handler = function(fastify){
       email: Joi.string().email().required(),
       pass: passwordComplexity(complexityOptions).required(),
       npass: passwordComplexity(complexityOptions),
-      phone: Phone.string().phoneNumber(),
+      phone: Phone.string().phoneNumber()
     })
     return schema.validate(user)
   }
@@ -117,23 +117,22 @@ const handler = function(fastify){
   }
 
   // create user
-  const create = async function(req, res){
-
+  const create = async function (req, res) {
     // filter request body
-    const userdata = _.pick(req.body, ['name', 'user', 'email', 'phone','pass'])
+    const userdata = _.pick(req.body, ['name', 'user', 'email', 'phone', 'pass'])
 
     // validate the request
     const { error } = validateUserRegistration(req.body)
-    if(error) return res.send({ type:'error', message: error.details[0].message })
+    if (error) return res.send({ type: 'error', message: error.details[0].message })
 
     // check if username or email is already registered
     let user = await Users.findOne({ user: userdata.user })
-      .catch(e =>  {
+      .catch(e => {
         console.log(`${Date.now()} [AUTH] ${e.name}: ${e.message}`)
-        return res.send({type:'error',message: 'Username is already taken'})
+        return res.send({ type: 'error', message: 'Username is already taken' })
       })
-    if(res.sent) return
-    if(user) return res.send({type:'error',message: 'Username is already taken'})
+    if (res.sent) return
+    if (user) return res.send({ type: 'error', message: 'Username is already taken' })
 
     // get current timestamp
     const tstamp = Date.now()
@@ -167,22 +166,22 @@ const handler = function(fastify){
   }
 
   // login handler
-  const login = async function(req, res){
+  const login = async function (req, res) {
     // filter request body
     const userdata = _.pick(req.body, ['user', 'pass'])
 
     // check if user exists
-    const user = await Users.findOne({user: userdata.user})
-      .catch(e =>  {
-          console.log(`${Date.now()} [AUTH] ${e.name}: ${e.message}`)
-          return res.send({type:'error', message: 'Server Error: Failed while finding the user'})
+    const user = await Users.findOne({ user: userdata.user })
+      .catch(e => {
+        console.log(`${Date.now()} [AUTH] ${e.name}: ${e.message}`)
+        return res.send({ type: 'error', message: 'Server Error: Failed while finding the user' })
       })
-    if(res.sent) return
-    if(!user) return res.send({type:'error',message: 'User does not exist'})
+    if (res.sent) return
+    if (!user) return res.send({ type: 'error', message: 'User does not exist' })
 
     // check if password is correct
     const valid = await bcrypt.compare(userdata.pass, user.pass)
-    if(!valid) return res.send({type:'error',message: 'Invalid password'})
+    if (!valid) return res.send({ type: 'error', message: 'Invalid password' })
 
     // create token
     return await createTokenRecord(req, user._doc)
@@ -194,18 +193,18 @@ const handler = function(fastify){
           token: t._doc.token
         }))
       .catch((e) => {
-          console.log(`${Date.now()} [AUTH] ${e.name}: ${e.message}`)
-          return res.code(200).send({
-            type: 'error',
-            message: 'Server Error: Failed to login',
-          })
+        console.log(`${Date.now()} [AUTH] ${e.name}: ${e.message}`)
+        return res.code(200).send({
+          type: 'error',
+          message: 'Server Error: Failed to login'
         })
+      })
   }
 
   // logout handler for logging out current session
   const logout = async (req, res) => {
     // check if token is valid
-    if(!req.authenticated) return res.send({type:'error',message: 'Invalid token'})
+    if (!req.authenticated) return res.send({ type: 'error', message: 'Invalid token' })
 
     // delete token
     return await deleteTokenRecord(req)
@@ -219,7 +218,7 @@ const handler = function(fastify){
   // logouts handler for logging out all user sessions except current session
   const logouts = async (req, res) => {
     // check if token is valid
-    if(!req.authenticated) return res.send({type:'error',message: 'Invalid token'})
+    if (!req.authenticated) return res.send({ type: 'error', message: 'Invalid token' })
 
     // delete token
     return await deleteTokensRecord(req)
@@ -233,8 +232,8 @@ const handler = function(fastify){
   // logout specific user session
   const logoutSession = async (req, res) => {
     // check if token is valid
-    if(!req.authenticated) return res.send({type:'error',message: 'Invalid token'})
-    
+    if (!req.authenticated) return res.send({ type: 'error', message: 'Invalid token' })
+
     // delete token
     return await deleteTokenRecordByIdOrToken(req)
       .then(() => res.send({ type: 'success', message: 'Session is now logged out.' }))
@@ -247,7 +246,7 @@ const handler = function(fastify){
   // read current token data
   const session = async (req, res) => {
     // check if token is valid
-    if(!req.authenticated) return res.send({type:'error',message: 'Invalid token'})
+    if (!req.authenticated) return res.send({ type: 'error', message: 'Invalid token' })
 
     const record = await readTokenRecord(req)
     if (!record) return res.send({ type: 'error', message: 'Session not found' })
@@ -257,7 +256,7 @@ const handler = function(fastify){
   // read many other token data
   const sessions = async (req, res) => {
     // check if token is valid
-    if(!req.authenticated) return res.send({type:'error',message: 'Invalid token'})
+    if (!req.authenticated) return res.send({ type: 'error', message: 'Invalid token' })
 
     const records = await readTokenRecords(req)
     if (!records) return res.send({ type: 'error', message: 'Sessions not found' })
@@ -269,7 +268,7 @@ const handler = function(fastify){
   // read all token data
   const allSessions = async (req, res) => {
     // check if token is valid
-    if(!req.authenticated) return res.send({type:'error',message: 'Invalid token'})
+    if (!req.authenticated) return res.send({ type: 'error', message: 'Invalid token' })
 
     const records = await readAllTokenRecords(req)
     if (!records) return res.send({ type: 'error', message: 'Sessions not found' })
@@ -281,7 +280,7 @@ const handler = function(fastify){
   // read handler for getting user data
   const read = async (req, res) => {
     // check if token is valid
-    if(!req.authenticated) return res.send({type:'error',message: 'Invalid token'})
+    if (!req.authenticated) return res.send({ type: 'error', message: 'Invalid token' })
 
     // email regex
     const emailRegex = /^(([^<>()\[\]\\.,;:\s@"]+(\.[^<>()\[\]\\.,;:\s@"]+)*)|(".+"))@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\])|(([a-zA-Z\-0-9]+\.)+[a-zA-Z]{2,}))$/
@@ -296,23 +295,23 @@ const handler = function(fastify){
         console.log(`${Date.now()} [AUTH] ${e.name}: ${e.message}`)
         return res.send({ type: 'error', message: 'Server Error: Failed to get user data.' })
       })
-    if(!user) return res.send({ type: 'error', message: 'User not found' })
+    if (!user) return res.send({ type: 'error', message: 'User not found' })
 
     // reply
     console.log('admin >> ', req.user.role === 'admin')
-    return res.send({ 
-      type: 'success', 
-      message: 'User found', 
-      data: req.user.role === 'admin' || 
-        user._doc._id === req.user._id ? 
-        user._doc: _.pick(user._doc, readResponseSchema)
+    return res.send({
+      type: 'success',
+      message: 'User found',
+      data: req.user.role === 'admin' ||
+        user._doc._id === req.user._id
+        ? user._doc : _.pick(user._doc, readResponseSchema)
     })
   }
 
   // Reads Users Handler
   const reads = async (req, res) => {
     // check if token is valid
-    if(!req.authenticated) return res.send({type:'error',message: 'Invalid token'})
+    if (!req.authenticated) return res.send({ type: 'error', message: 'Invalid token' })
 
     const pg = _.pick(req.params, ['page', 'items'])
     const page = pg.page || 1
@@ -337,10 +336,9 @@ const handler = function(fastify){
     session,
     sessions,
     allSessions,
-    read, 
+    read,
     reads
   }
-  
 }
 
 module.exports = handler

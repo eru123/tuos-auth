@@ -1,7 +1,7 @@
 module.exports = {
-    plugin: require('./plugin'),
-    models: {
-        Tokens: require('./model.tokens'),
-        Users: require('./model.users')
-    }
+  plugin: require('./plugin'),
+  models: {
+    Tokens: require('./model.tokens'),
+    Users: require('./model.users')
+  }
 }
