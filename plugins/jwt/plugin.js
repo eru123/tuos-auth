@@ -17,7 +17,8 @@ const plugin = async function (fastify, opts, done) {
 
   const prepareAuth = async (req, res) => {
     try {
-      const token = req.headers.authorization.split(' ')[1]
+      const token = String(req.headers.authorization).split(' ')[1]
+      if (!token) { return }
       req.token = token
 
       const userId = fastify.jwt.decode(token)._id
