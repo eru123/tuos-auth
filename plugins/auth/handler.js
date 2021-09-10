@@ -8,9 +8,8 @@ const usid = new USID()
 const handler = function (fastify, opts) {
   const Users = fastify.mongoose.models.Users
   const Tokens = fastify.mongoose.models.Tokens
-  const options = typeof opts === 'object' ? opts : (() => { console.log('[PLUGIN] auth: Using default auth options'); return {} })()
-  // const tokenExpiration = Number(options.token_expiration) || 86400000
-  const codeExpiration = Number(options.vcode_expiration) || 3600000
+  const options = opts.auth || (() => { console.log('[PLUGIN] auth: Using default auth options'); return {} })()
+  const codeExpiration = Number(options.code_expiration) || 3600000
 
   // create a new token
   const newJWTToken = (payload) => String(fastify.jwt.sign({ ..._.pick(payload, (['_id', 'name', 'user', 'role'])) }))
