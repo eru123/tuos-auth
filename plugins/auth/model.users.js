@@ -6,11 +6,15 @@ module.exports = function (fastify) {
     pass: String,
     created_at: Number,
     updated_at: Number,
-    phone: String,
-    phoneVerified: Boolean,
+    // phone: String, // not available yet
+    // phoneVerified: Boolean,
     email: String,
-    emailVerified: Boolean,
-    role: String
+    email_verified: Boolean,
+    email_code: String,
+    email_expire: Number,
+    role: String,
+    status: String, // account status (active|banned)
+    data: { String: String } // for additional data created by other plugins
   }, { timestamp: true })
   return mongoose.model('Users', usersSchema)
 }

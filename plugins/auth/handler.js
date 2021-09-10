@@ -3,10 +3,14 @@ const Joi = require('joi')
 const Phone = Joi.extend(require('joi-phone-number'))
 const bcrypt = require('bcrypt')
 const passwordComplexity = require('joi-password-complexity')
-
-const handler = function (fastify) {
+const USID = require('usid')
+const usid = new USID()
+const handler = function (fastify, opts) {
   const Users = fastify.mongoose.models.Users
   const Tokens = fastify.mongoose.models.Tokens
+  const options = typeof opts === 'object' ? opts : (() => { console.log('[PLUGIN] auth: Using default auth options'); return {} })()
+  // const tokenExpiration = Number(options.token_expiration) || 86400000
+  const codeExpiration = Number(options.vcode_expiration) || 3600000
 
   // create a new token
   const newJWTToken = (payload) => String(fastify.jwt.sign({ ..._.pick(payload, (['_id', 'name', 'user', 'role'])) }))
@@ -52,9 +56,9 @@ const handler = function (fastify) {
     'name',
     'user',
     'phone',
-    'phoneVerified',
+    'phone_verified',
     'email',
-    'emailVerified',
+    'email_verified',
     'created_at',
     'updated_at',
     'role'
@@ -119,7 +123,7 @@ const handler = function (fastify) {
   // create user
   const create = async function (req, res) {
     // filter request body
-    const userdata = _.pick(req.body, ['name', 'user', 'email', 'phone', 'pass'])
+    const userdata = _.pick(req.body, ['name', 'user', 'email', 'pass'])
 
     // validate the request
     const { error } = validateUserRegistration(req.body)
@@ -141,11 +145,22 @@ const handler = function (fastify) {
     // create user object from User model
     user = new Users(userdata)
     user.pass = await pash(user.pass)
-    user.phoneVerified = false
-    user.emailVerified = false
+    // user.phone_verified = false // not available yet
+    user.email_verified = false
     user.role = isFirst ? 'user' : 'admin'
     user.created_at = tstamp
     user.updated_at = tstamp
+
+    // send email verification
+    if (userdata.email) {
+      user.email_code = usid.uid()
+      user.email_expire = Date.now() + codeExpiration
+      /*
+      **
+      ** CODE HERE
+      **
+      */
+    }
 
     // save user to database
     return await user.save()
@@ -283,7 +298,7 @@ const handler = function (fastify) {
     if (!req.authenticated) return res.send({ type: 'error', message: 'Invalid token' })
 
     // email regex
-    const emailRegex = /^(([^<>()\[\]\\.,;:\s@"]+(\.[^<>()\[\]\\.,;:\s@"]+)*)|(".+"))@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\])|(([a-zA-Z\-0-9]+\.)+[a-zA-Z]{2,}))$/
+    const emailRegex = /^(([^<>()[\]\\.,;:\s@"]+(\.[^<>()[\]\\.,;:\s@"]+)*)|(".+"))@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\])|(([a-zA-Z\-0-9]+\.)+[a-zA-Z]{2,}))$/
 
     // parse user request
     const id = req.params.user || req.user._id
@@ -295,17 +310,19 @@ const handler = function (fastify) {
         console.log(`${Date.now()} [AUTH] ${e.name}: ${e.message}`)
         return res.send({ type: 'error', message: 'Server Error: Failed to get user data.' })
       })
+
     if (!user) return res.send({ type: 'error', message: 'User not found' })
 
     // reply
-    console.log('admin >> ', req.user.role === 'admin')
-    return res.send({
-      type: 'success',
-      message: 'User found',
-      data: req.user.role === 'admin' ||
-        user._doc._id === req.user._id
-        ? user._doc : _.pick(user._doc, readResponseSchema)
-    })
+    if (user.status === 'active') {
+      return res.send({
+        type: 'success',
+        message: 'User found',
+        data: req.user.role === 'admin' || user._doc._id === req.user._id ? user._doc : _.pick(user._doc, readResponseSchema)
+      })
+    } else {
+      return res.send({ type: 'error', message: 'User information is not available' })
+    }
   }
 
   // Reads Users Handler
@@ -318,13 +335,198 @@ const handler = function (fastify) {
     const items = pg.items || 20
     const users = await Users.paginate({}, { page: page, limit: items })
     const result = []
-    users.docs.forEach(u => result.push(req.user.role === 'admin' || u._id === req.user._id ? u : _.pick(u, readResponseSchema)))
+    users.docs.forEach(u => { if (u.status === 'active') result.push(req.user.role === 'admin' || u._id === req.user._id ? u : _.pick(u, readResponseSchema)) })
     res.send({
       status: 'success',
       message: `${users.docs.length} users found.`,
       size: result.length,
       data: result
     })
+  }
+
+  // update handler for updating user data
+  const update = async (req, res) => {
+    // check if token is valid
+    if (!req.authenticated) return res.send({ type: 'error', message: 'Invalid token' })
+
+    // email regex
+    const emailRegex = /^(([^<>()[\]\\.,;:\s@"]+(\.[^<>()[\]\\.,;:\s@"]+)*)|(".+"))@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\])|(([a-zA-Z\-0-9]+\.)+[a-zA-Z]{2,}))$/
+
+    // filter request body
+    const userdata = _.pick(req.body, ['name', 'user', 'email', 'phone', 'pass', 'npass'])
+
+    // validate data
+    const data = validateUserUpdate(userdata)
+
+    // parse user request
+    const id = req.params.user || req.user._id
+    const find = id.match(/^[0-9a-fA-F]{24}$/) ? { _id: id } : id.match(emailRegex) ? { email: id } : { user: id }
+
+    // get user data
+    const user = await Users.findOne(find)
+      .catch((e) => {
+        console.log(`${Date.now()} [AUTH] ${e.name}: ${e.message}`)
+        return res.send({ type: 'error', message: 'Server Error: Failed to get user data.' })
+      })
+
+    // check if user exists
+    if (!user) return res.send({ type: 'error', message: 'User not found' })
+
+    // check if user is admin or owner of the data
+    if (req.user.role !== 'admin' && user._id !== req.user._id) return res.send({ type: 'error', message: 'You are not allowed to update this user' })
+
+    // for admin
+    if (req.user.role === 'admin') {
+      if (data.user && data.user !== user.user) {
+        const isUserExists = await Users.findOne({ user: data.user })
+        if (isUserExists) return res.send({ type: 'error', message: 'User already exists' })
+        user.user = data.user
+      }
+
+      if (data.email && data.email !== user.email) user.email = data.email
+      user.email_verified = data.email_verified || user.email_verified
+
+      user.name = data.name
+      // if (data.phone && data.phone !== user.phone) user.phone = data.phone // not available
+      // user.phone_verified = data.phone_verified || user.phone_verified // not available
+
+      user.role = data.role || user.role
+      user.status = data.status || user.status
+
+      if (data.pass) user.pass = await pash(data.pass)
+
+      user.updated_at = Date.now()
+    } else if (user.status === 'active') {
+      user.name = data.name || user.name
+
+      // change email
+      if (data.email && data.email !== user.email) {
+        user.email = data.email
+        user.email_verified = false
+        user.email_code = usid.uid()
+        user.email_expire = Date.now() + codeExpiration
+        // send verification email
+        /*
+        **
+        ** CODE HERE
+        **
+        */
+      }
+
+      // change phone
+      // if (data.phone) { // not available
+      //   user.phone = data.phone
+      //   user.phone_verified = false
+      // }
+
+      // change username
+      if (data.user && data.user !== user.user) {
+        const isUserExists = await Users.findOne({ user: data.user })
+        if (isUserExists) return res.send({ type: 'error', message: 'User already exists' })
+        user.user = data.user
+      }
+
+      // change password
+      if (data.npass && data.npass === data.pass) {
+        const pass = await bcrypt.compare(user.pass, data.pass)
+        if (!pass) return res.send({ type: 'error', message: 'Invalid password' })
+        user.pass = await pash(data.npass)
+      }
+
+      user.updated_at = Date.now()
+    }
+
+    // update user data
+    return await Users.findOneAndUpdate(find, data)
+      .then(e => res.send({ type: 'success', message: 'User updated successfully', data: req.user.role === 'admin' ? e._doc : _.pick(e._doc, userResponseSchema) }))
+      .catch((e) => {
+        console.log(`${Date.now()} [AUTH] ${e.name}: ${e.message}`)
+        return res.send({ type: 'error', message: 'Server Error: Failed to update user data.' })
+      })
+  }
+
+  // delete user handler
+  const remove = async (req, res) => {
+    // check if token is valid
+    if (!req.authenticated) return res.send({ type: 'error', message: 'Invalid token' })
+
+    // get id
+    const id = req.params.user || req.user._id
+    const find = id.match(/^[0-9a-fA-F]{24}$/) ? { _id: id } : { user: id }
+
+    // find user
+    const user = await Users.findOne(find)
+    if (!user) return res.send({ type: 'error', message: 'User not found' })
+
+    // check if user is admin or owner of the data
+    if (req.user.role !== 'admin' && user._id !== req.user._id) return res.send({ type: 'error', message: 'You are not allowed to delete this user' })
+
+    // delete user
+    return await Users.deleteOne(find)
+      .then(() => res.send({ type: 'success', message: 'User deleted successfully' }))
+      .catch((e) => {
+        console.log(`${Date.now()} [AUTH] ${e.name}: ${e.message}`)
+        return res.send({ type: 'error', message: 'Server Error: Failed to delete user data.' })
+      })
+  }
+
+  const resendEmail = async (req, res) => {
+    // check if token is valid
+    if (!req.authenticated) return res.send({ type: 'error', message: 'Invalid token' })
+
+    const find = { _id: req.user._id }
+
+    // find user
+    const user = await Users.findOne(find)
+    if (!user) return res.send({ type: 'error', message: 'User not found' })
+
+    // check if email_expiration is expired
+    if (user.email_expiration < Date.now()) return res.send({ type: 'error', message: 'Email verification code has been sent already, wait for an hour before re-sending again.' })
+
+    // email regex
+    const emailRegex = /^(([^<>()[\]\\.,;:\s@"]+(\.[^<>()[\]\\.,;:\s@"]+)*)|(".+"))@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}])|(([a-zA-Z\-0-9]+\.)+[a-zA-Z]{2,}))$/
+    if (user.email && String(user.email).match(emailRegex)) {
+      user.email_code = usid.uid()
+      user.email_expiration = Date.now() + codeExpiration
+      // send verification email
+      /*
+      **
+      ** CODE HERE
+      **
+      */
+      return await user.save()
+        .then(() => res.send({ type: 'success', message: 'Email verification code has been sent successfully.' }))
+        .catch((e) => {
+          console.log(`${Date.now()} [AUTH] ${e.name}: ${e.message}`)
+          return res.send({ type: 'error', message: 'Server Error: Failed to update user data.' })
+        })
+    } else return res.send({ type: 'error', message: 'Invalid email address' })
+  }
+
+  const verifyEmail = async (req, res) => {
+    // vcheck if valid token
+    if (!req.authenticated) return res.send({ type: 'error', message: 'Invalid token' })
+
+    // filter data
+    const data = _.pick(req.body, ['code', 'email'])
+    const find = { _id: req.user._id }
+
+    // check if user exists
+    const user = await Users.findOne(find)
+    if (!user) return res.send({ type: 'error', message: 'User not found' })
+
+    // check if valid code
+    if (user.email_code === data.code && user.email === data.email) {
+      // check if expired email_expiration
+      if (Date.now() > user.email_expire) return res.send({ type: 'error', message: 'Email verification code has expired' })
+      user.email_verified = true
+      return await user.save()
+        .then(() => res.send({ type: 'success', message: 'Email verified successfully' }))
+        .catch((e) => {
+          console.log(`${Date.now()} [AUTH] ${e.name}: ${e.message}`)
+          return res.send({ type: 'error', message: 'Server Error: Failed to verify email.' })
+        })
+    } else return res.send({ type: 'error', message: 'Invalid email verification code' })
   }
 
   return {
@@ -337,7 +539,11 @@ const handler = function (fastify) {
     sessions,
     allSessions,
     read,
-    reads
+    reads,
+    update,
+    delete: remove,
+    verifyEmail,
+    resendEmail
   }
 }
 

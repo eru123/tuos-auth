@@ -4,8 +4,11 @@ const plugin = async function (fastify, opts, done) {
   const Tokens = fastify.mongoose.models.Tokens
 
   const defaultOpts = { secret_token: 'default_secret_token' }
-  const options = opts.jwt || defaultOpts
-  const { secretToken } = options
+  const options = opts.jwt || (() => {
+    console.log('[PLUGIN] jwt: Using default secret_token')
+    return defaultOpts
+  })()
+  const secretToken = options.secret_token
 
   await fastify.register(require('fastify-jwt'), { secret: secretToken })
 
