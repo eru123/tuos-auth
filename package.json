@@ -13,6 +13,7 @@
     "joi": "^17.4.2",
     "joi-password-complexity": "^5.1.0",
     "joi-phone-number": "^5.0.1",
-    "tuos-tera": "^1.0.7"
+    "tuos-tera": "^1.0.7",
+    "usid": "^1.0.21"
   }
 }
