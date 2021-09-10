@@ -1,6 +1,6 @@
 const fp = require('fastify-plugin')
 const plugin = async function (fastify, opts, done) {
-  const h = require('./handler')(fastify)
+  const h = require('./handler')(fastify, opts)
 
   fastify.post('/api/auth/register', h.create)
   fastify.post('/api/auth/login', h.login)
