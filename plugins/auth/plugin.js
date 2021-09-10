@@ -13,13 +13,19 @@ const plugin = async function (fastify, opts, done) {
   fastify.get('/api/auth/sessions/all', h.allSessions)
   fastify.get('/api/auth/sessions/:page', h.sessions)
   fastify.get('/api/auth/sessions/:page/:items', h.sessions)
+
+  // user get and list
   fastify.get('/api/user', h.read)
   fastify.get('/api/user/:user', h.read)
   fastify.get('/api/users', h.reads)
   fastify.get('/api/users/:page', h.reads)
   fastify.get('/api/users/:page/:items', h.reads)
-  // fastify.put('/api/user', h.auth, h.update)
-  // fastify.delete('/api/user', h.auth, h.delete)
+  fastify.put('/api/user', h.update)
+  fastify.delete('/api/user', h.delete)
+
+  // email verification
+  fastify.post('/api/auth/email/resend', h.resendEmail)
+  fastify.post('/api/auth/email/verify', h.verifyEmail)
 
   done()
 }
