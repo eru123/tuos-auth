@@ -8,6 +8,7 @@ const plugin = async (fastify, opts, done) => {
     options: opts,
     order: [
       'jwt',
+      'mailer',
       'auth'
     ]
   })

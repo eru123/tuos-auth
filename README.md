@@ -25,6 +25,21 @@ const options = {
     // for email verification
     code_expiration: '<milliseconds>'
   },
+  mailer: {
+    // see https://nodemailer.com/
+    transport: {
+      secure: true,
+      host: 'smtp.gmail.com',
+      port: 587,
+      auth: {
+        user: 'myemail@gmail.com',
+        pass: '!MySprScrPsswrd2021'
+      }
+    },
+    defaults: {
+      // sendMail defaults
+    }
+  }
 }
 
 // tuos-mongoose must be registered first before tuos-auth

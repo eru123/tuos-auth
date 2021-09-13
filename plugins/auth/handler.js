@@ -5,13 +5,32 @@ const bcrypt = require('bcrypt')
 const passwordComplexity = require('joi-password-complexity')
 const USID = require('usid')
 const usid = new USID()
+const rawTemplates = {
+  verification: require('./mailer.verification')
+}
+
 const handler = function (fastify, opts) {
   const Users = fastify.mongoose.models.Users
   const Tokens = fastify.mongoose.models.Tokens
   const options = opts.auth || (() => { console.log('[PLUGIN] auth: Using default auth options'); return {} })()
   const codeExpiration = Number(options.code_expiration) || 3600000
-
+  const app = opts.auth || {}
   // create a new token
+  const parseTemplates = (add) => {
+    const pops = { ...app, ...add }
+    const parsed = {}
+    for (const rkey in rawTemplates) {
+      parsed[rkey] = {}
+      for (const key in rawTemplates[rkey]) {
+        let text = String(rawTemplates[rkey][key])
+        text = text.replace('::appname::', pops.name || 'Tuos')
+        text = text.replace('::appkey::', pops.name || 'tuos')
+        text = text.replace('::code::', pops.code || 'tuos')
+        parsed[rkey][key] = text
+      }
+    }
+  }
+
   const newJWTToken = (payload) => String(fastify.jwt.sign({ ..._.pick(payload, (['_id', 'name', 'user', 'role'])) }))
 
   // create current user token record
@@ -134,7 +153,8 @@ const handler = function (fastify, opts) {
         console.log(`${Date.now()} [AUTH] ${e.name}: ${e.message}`)
         return res.send({ type: 'error', message: 'Username is already taken' })
       })
-    if (res.sent) return
+
+    if (res.sent) return 0
     if (user) return res.send({ type: 'error', message: 'Username is already taken' })
 
     // get current timestamp
@@ -152,13 +172,18 @@ const handler = function (fastify, opts) {
 
     // send email verification
     if (userdata.email) {
-      user.email_code = usid.uid()
+      const emailCode = usid.uid()
+      user.email_code = emailCode
       user.email_expire = Date.now() + codeExpiration
-      /*
-      **
-      ** CODE HERE
-      **
-      */
+      const mailOpts = parseTemplates({ code: emailCode }).verification
+      mailOpts.to = userdata.email
+      await fastify.mailer.send(mailOpts)
+        .catch(e => {
+          console.log(`${Date.now()} [AUTH] ${e.name}: ${e.message}`)
+          return res.send({ type: 'error', message: 'Email verification failed, please try again.' })
+        })
+
+      if (res.sent) return 0
     }
 
     // save user to database
@@ -190,7 +215,8 @@ const handler = function (fastify, opts) {
         console.log(`${Date.now()} [AUTH] ${e.name}: ${e.message}`)
         return res.send({ type: 'error', message: 'Server Error: Failed while finding the user' })
       })
-    if (res.sent) return
+
+    if (res.sent) return 0
     if (!user) return res.send({ type: 'error', message: 'User does not exist' })
 
     // check if password is correct
@@ -310,6 +336,7 @@ const handler = function (fastify, opts) {
         return res.send({ type: 'error', message: 'Server Error: Failed to get user data.' })
       })
 
+    if (res.sent) return 0
     if (!user) return res.send({ type: 'error', message: 'User not found' })
 
     // reply
@@ -368,6 +395,7 @@ const handler = function (fastify, opts) {
         return res.send({ type: 'error', message: 'Server Error: Failed to get user data.' })
       })
 
+    if (res.sent) return 0
     // check if user exists
     if (!user) return res.send({ type: 'error', message: 'User not found' })
 
@@ -400,20 +428,22 @@ const handler = function (fastify, opts) {
 
       // change email
       if (data.email && data.email !== user.email) {
+        const emailCode = usid.uid()
         user.email = data.email
         user.email_verified = false
-        user.email_code = usid.uid()
+        user.email_code = emailCode
         user.email_expire = Date.now() + codeExpiration
-        // send verification email
-        /*
-        **
-        ** CODE HERE
-        **
-        */
+        const mailOpts = parseTemplates({ code: emailCode }).verification
+        await fastify.mailer.send(mailOpts)
+          .catch((e) => {
+            console.log(`${Date.now()} [AUTH] ${e.name}: ${e.message}`)
+            return res.send({ type: 'error', message: 'Server Error: Failed to send email.' })
+          })
+        if (res.sent) return 0
       }
 
       // change phone
-      // if (data.phone) { // not available
+      // if (data.phone) { // not available yet
       //   user.phone = data.phone
       //   user.phone_verified = false
       // }
@@ -485,14 +515,19 @@ const handler = function (fastify, opts) {
     // email regex
     const emailRegex = /^(([^<>()[\]\\.,;:\s@"]+(\.[^<>()[\]\\.,;:\s@"]+)*)|(".+"))@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}])|(([a-zA-Z\-0-9]+\.)+[a-zA-Z]{2,}))$/
     if (user.email && String(user.email).match(emailRegex)) {
-      user.email_code = usid.uid()
+      const emailCode = usid.uid()
+      user.email_code = emailCode
       user.email_expiration = Date.now() + codeExpiration
-      // send verification email
-      /*
-      **
-      ** CODE HERE
-      **
-      */
+
+      const mailOpts = parseTemplates({ code: emailCode }).verification
+      await fastify.mailer.send(mailOpts)
+        .catch((e) => {
+          console.log(`${Date.now()} [AUTH] ${e.name}: ${e.message}`)
+          return res.send({ type: 'error', message: 'Server Error: Failed to send email.' })
+        })
+
+      if (res.sent) return 0
+
       return await user.save()
         .then(() => res.send({ type: 'success', message: 'Email verification code has been sent successfully.' }))
         .catch((e) => {
