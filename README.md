@@ -23,7 +23,7 @@ const options = {
   },
   auth: {
     // for email verification
-    code_expiration: '<milliseconds>'
+    code_expiration: '<milliseconds>' // default: 1800000 (30mins)
   },
   mailer: {
     // see https://nodemailer.com/
