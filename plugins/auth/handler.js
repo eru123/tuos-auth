@@ -13,9 +13,10 @@ const handler = function (fastify, opts) {
   const Users = fastify.mongoose.models.Users
   const Tokens = fastify.mongoose.models.Tokens
   const options = opts.auth || (() => { console.log('[PLUGIN] auth: Using default auth options'); return {} })()
-  const codeExpiration = Number(options.code_expiration) || 3600000
+  const codeExpiration = Number(options.code_expiration) || 1800000
   const app = opts.auth || {}
-  // create a new token
+
+  // parsing mail templates
   const parseTemplates = (add) => {
     const pops = { ...app, ...add }
     const parsed = {}
@@ -23,14 +24,22 @@ const handler = function (fastify, opts) {
       parsed[rkey] = {}
       for (const key in rawTemplates[rkey]) {
         let text = String(rawTemplates[rkey][key])
-        text = text.replace('::appname::', pops.name || 'Tuos')
-        text = text.replace('::appkey::', pops.name || 'tuos')
-        text = text.replace('::code::', pops.code || 'tuos')
+        if (key === 'text') {
+          text += `\nCode is only available for ${codeExpiration / 60 / 1000} mins.\n\nBest regards,\nTuos Team`
+        } else if (key === 'html') {
+          text += `<br /><b>Code is only available for ${codeExpiration / 60 / 1000} mins.</b><br /><br />Best regards,<br />Tuos Team`
+        }
+        text = text.replace(/::appname::/g, pops.name || 'Tuos')
+        text = text.replace(/::appkey::/g, pops.name || 'tuos')
+        text = text.replace(/::code::/g, pops.code || 'tuos')
+
         parsed[rkey][key] = text
       }
     }
+    return parsed
   }
 
+  // create a new token
   const newJWTToken = (payload) => String(fastify.jwt.sign({ ..._.pick(payload, (['_id', 'name', 'user', 'role'])) }))
 
   // create current user token record
@@ -77,9 +86,12 @@ const handler = function (fastify, opts) {
     'phone_verified',
     'email',
     'email_verified',
+    'email_expire',
     'created_at',
     'updated_at',
-    'role'
+    'role',
+    'status',
+    '__v'
   ]
 
   const readResponseSchema = [
@@ -87,6 +99,18 @@ const handler = function (fastify, opts) {
     'name',
     'user',
     'created_at'
+  ]
+
+  const paginateMetaSchema = [
+    'totalDocs',
+    'limit',
+    'totalPages',
+    'page',
+    'pagingCounter',
+    'hasPrevPage',
+    'hasNextPage',
+    'prevPage',
+    'nextPage'
   ]
 
   // Password Complexity for Password Validation
@@ -154,7 +178,7 @@ const handler = function (fastify, opts) {
         return res.send({ type: 'error', message: 'Username is already taken' })
       })
 
-    if (res.sent) return 0
+    if (res.sent) return res.sent
     if (user) return res.send({ type: 'error', message: 'Username is already taken' })
 
     // get current timestamp
@@ -166,7 +190,8 @@ const handler = function (fastify, opts) {
     user.pass = await pash(user.pass)
     // user.phone_verified = false // not available yet
     user.email_verified = false
-    user.role = isFirst ? 'user' : 'admin'
+    user.role = isFirst ? 'admin' : 'user'
+    user.status = 'active'
     user.created_at = tstamp
     user.updated_at = tstamp
 
@@ -183,7 +208,7 @@ const handler = function (fastify, opts) {
           return res.send({ type: 'error', message: 'Email verification failed, please try again.' })
         })
 
-      if (res.sent) return 0
+      if (res.sent) return res.sent
     }
 
     // save user to database
@@ -216,17 +241,17 @@ const handler = function (fastify, opts) {
         return res.send({ type: 'error', message: 'Server Error: Failed while finding the user' })
       })
 
-    if (res.sent) return 0
-    if (!user) return res.send({ type: 'error', message: 'User does not exist' })
+    if (res.sent) return res.sent
+    if (!user) return res.send({ type: 'error', message: 'Invalid credentials' })
 
     // check if password is correct
     const valid = await bcrypt.compare(userdata.pass, user.pass)
-    if (!valid) return res.send({ type: 'error', message: 'Invalid password' })
+    if (!valid) return res.send({ type: 'error', message: 'Invalid credentials' })
 
     // create token
     return await createTokenRecord(req, user._doc)
       .then((t) => // return response
-        res.code(200).send({
+        res.send({
           type: 'success',
           message: 'User logged in successfully',
           data: _.pick(user._doc, userResponseSchema),
@@ -234,7 +259,7 @@ const handler = function (fastify, opts) {
         }))
       .catch((e) => {
         console.log(`${Date.now()} [AUTH] ${e.name}: ${e.message}`)
-        return res.code(200).send({
+        return res.send({
           type: 'error',
           message: 'Server Error: Failed to login'
         })
@@ -302,7 +327,15 @@ const handler = function (fastify, opts) {
     if (!records) return res.send({ type: 'error', message: 'Sessions not found' })
     const result = []
     records.docs.forEach(r => result.push({ ..._.pick(r, ['_id', 'user_id', 'created_at', 'device', 'ip']), is_current: r.token === req.token }))
-    if (res.sent === false) return res.send({ type: 'success', message: `${result.length} sessions found`, size: result.length, data: result })
+    if (res.sent === false) {
+      return res.send({
+        type: 'success',
+        message: `${result.length} sessions found`,
+        size: result.length,
+        data: result,
+        ..._.pick(records, paginateMetaSchema)
+      })
+    }
   }
 
   // read all token data
@@ -336,7 +369,7 @@ const handler = function (fastify, opts) {
         return res.send({ type: 'error', message: 'Server Error: Failed to get user data.' })
       })
 
-    if (res.sent) return 0
+    if (res.sent) return res.sent
     if (!user) return res.send({ type: 'error', message: 'User not found' })
 
     // reply
@@ -395,7 +428,7 @@ const handler = function (fastify, opts) {
         return res.send({ type: 'error', message: 'Server Error: Failed to get user data.' })
       })
 
-    if (res.sent) return 0
+    if (res.sent) return res.sent
     // check if user exists
     if (!user) return res.send({ type: 'error', message: 'User not found' })
 
@@ -428,6 +461,7 @@ const handler = function (fastify, opts) {
 
       // change email
       if (data.email && data.email !== user.email) {
+        if (Number(user.email_expire) > Date.now()) return res.send({ type: 'error', message: `You need to wait for ${Number(user.email_expire) / 1000 / 60} mins before changing recovery email` })
         const emailCode = usid.uid()
         user.email = data.email
         user.email_verified = false
@@ -439,7 +473,7 @@ const handler = function (fastify, opts) {
             console.log(`${Date.now()} [AUTH] ${e.name}: ${e.message}`)
             return res.send({ type: 'error', message: 'Server Error: Failed to send email.' })
           })
-        if (res.sent) return 0
+        if (res.sent) return res.sent
       }
 
       // change phone
@@ -507,9 +541,14 @@ const handler = function (fastify, opts) {
 
     // find user
     const user = await Users.findOne(find)
+      .catch((e) => {
+        console.log(`${Date.now()} [AUTH] ${e.name}: ${e.message}`)
+        return false
+      })
     if (!user) return res.send({ type: 'error', message: 'User not found' })
 
     // check if email_expiration is expired
+    if (user.email_verified) return res.send({ type: 'error', message: 'Email already verified' })
     if (user.email_expiration < Date.now()) return res.send({ type: 'error', message: 'Email verification code has been sent already, wait for an hour before re-sending again.' })
 
     // email regex
@@ -526,7 +565,7 @@ const handler = function (fastify, opts) {
           return res.send({ type: 'error', message: 'Server Error: Failed to send email.' })
         })
 
-      if (res.sent) return 0
+      if (res.sent) return res.sent
 
       return await user.save()
         .then(() => res.send({ type: 'success', message: 'Email verification code has been sent successfully.' }))
