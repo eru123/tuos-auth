@@ -29,11 +29,11 @@ const options = {
     // see https://nodemailer.com/
     transport: {
       secure: true,
-      host: 'smtp.gmail.com',
+      host: '<smtp_server>',
       port: 587,
       auth: {
-        user: 'myemail@gmail.com',
-        pass: '!MySprScrPsswrd2021'
+        user: '<your_email>',
+        pass: '<email_password>'
       }
     },
     defaults: {
