@@ -23,8 +23,25 @@ const options = {
   },
   auth: {
     // for email verification
-    code_expiration: '<milliseconds>'
+    api_url: 'http://localhost:8080', // url where your api is hosted
+    client_url: 'http://localhost:3000', // your web app url, this will be used as fallback url
+    code_expiration: '1800000' // default
   },
+  mailer: {
+    // see https://nodemailer.com/
+    transport: {
+      secure: true,
+      host: '<smtp_server>',
+      port: 587,
+      auth: {
+        user: '<your_email>',
+        pass: '<email_password>'
+      }
+    },
+    defaults: {
+      // sendMail defaults
+    }
+  }
 }
 
 // tuos-mongoose must be registered first before tuos-auth
