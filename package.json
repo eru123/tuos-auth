@@ -14,7 +14,7 @@
     "joi-password-complexity": "^5.1.0",
     "joi-phone-number": "^5.0.1",
     "nodemailer": "^6.6.3",
-    "tuos-tera": "^1.0.7",
+    "tuos-tera": "^1.0.9",
     "usid": "^1.0.21"
   }
 }
