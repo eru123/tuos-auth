@@ -474,7 +474,8 @@ const handler = function (fastify, opts) {
       status: 'success',
       message: `${users.docs.length} users found.`,
       size: result.length,
-      data: result
+      data: result,
+      ..._.pick(users, paginateMetaSchema)
     })
   }
 
