@@ -14,7 +14,9 @@ const handler = function (fastify, opts) {
   const Tokens = fastify.mongoose.models.Tokens
   const options = opts.auth || (() => { console.log('[PLUGIN] auth: Using default auth options'); return {} })()
   const codeExpiration = Number(options.code_expiration) || 1800000
-  const app = opts.auth || {}
+  const apiUrl = options.api_url || 'http://localhost:8080'
+  const clientUrl = options.client_url || ''
+  const app = { ...options, ...opts.app }
 
   // parsing mail templates
   const parseTemplates = (add) => {
@@ -31,6 +33,7 @@ const handler = function (fastify, opts) {
         }
         text = text.replace(/::appname::/g, pops.name || 'Tuos')
         text = text.replace(/::appkey::/g, pops.name || 'tuos')
+        text = text.replace(/::codelink::/g, pops.codelink || '<InvalidLink>')
         text = text.replace(/::code::/g, pops.code || 'tuos')
 
         parsed[rkey][key] = text
@@ -41,6 +44,65 @@ const handler = function (fastify, opts) {
 
   // create a new token
   const newJWTToken = (payload) => String(fastify.jwt.sign({ ..._.pick(payload, (['_id', 'name', 'user', 'role'])) }))
+
+  // create verification email link
+  const newEmailLink = (payload) => {
+    const data = _.pick(payload, ['user', 'email', 'email_code'])
+    data.return_url = payload.return_url || ''
+    data.error_url = payload.error_url || ''
+    const token = String(fastify.jwt.sign(payload))
+    return `${apiUrl}/api/auth/email?token=${token}`
+  }
+
+  // verify email link
+  const verifyEmailLink = async (req, res) => {
+    try {
+      const token = req.query.token
+      const payload = fastify.jwt.verify(token)
+      const user = await Users.findOne(_.pick(payload, ['user', 'email', 'email_code'])).catch(() => false)
+
+      const errFallback = (f = 0) => {
+        if (payload.error_url) {
+          return res.redirect(payload.error_url)
+        } else if (f === 1) {
+          return res.send('SERVER ERROR')
+        } else {
+          return res.send('INVALID TOKEN')
+        }
+      }
+
+      if (!user) return errFallback()
+      if (!user.email_verified || user.status === 'pending') {
+        if (!user.email_verified) user.email_verified = true
+        if (user.status === 'pending') user.status = 'active'
+
+        user.email_code = ''
+        user.email_expire = 0
+        user.updated_at = Date.now()
+
+        await user.save()
+          .catch((e) => {
+            console.log(`${Date.now()} [AUTH] ${e.name}: ${e.message}`)
+            return errFallback(1)
+          })
+
+        if (res.sent) return res.sent
+      }
+
+      if (user.code_expiration < Date.now()) return errFallback()
+
+      if (payload.return_url) {
+        return res.redirect(payload.return_url)
+      } else if (clientUrl) {
+        return res.redirect(clientUrl)
+      } else {
+        return res.send('OK')
+      }
+    } catch (e) {
+      console.log(`${Date.now()} [AUTH] ${e.name}: ${e.message}`)
+      return res.send('INVALID LINK')
+    }
+  }
 
   // create current user token record
   const createTokenRecord = async (req, payload) => {
@@ -141,8 +203,8 @@ const handler = function (fastify, opts) {
     const schema = Joi.object({
       name: Joi.string().min(3).max(255),
       user: Joi.string().alphanum().min(3).max(30),
-      email: Joi.string().email().required(),
-      pass: passwordComplexity(complexityOptions).required(),
+      email: Joi.string().email(),
+      pass: passwordComplexity(complexityOptions),
       npass: passwordComplexity(complexityOptions),
       phone: Phone.string().phoneNumber()
     })
@@ -166,6 +228,7 @@ const handler = function (fastify, opts) {
   const create = async function (req, res) {
     // filter request body
     const userdata = _.pick(req.body, ['name', 'user', 'email', 'pass'])
+    const fallbackUrls = _.pick(req.body, ['return_url', 'client_url'])
 
     // validate the request
     const { error } = validateUserRegistration(req.body)
@@ -191,7 +254,7 @@ const handler = function (fastify, opts) {
     // user.phone_verified = false // not available yet
     user.email_verified = false
     user.role = isFirst ? 'admin' : 'user'
-    user.status = 'active'
+    user.status = 'pending'
     user.created_at = tstamp
     user.updated_at = tstamp
 
@@ -200,7 +263,11 @@ const handler = function (fastify, opts) {
       const emailCode = usid.uid()
       user.email_code = emailCode
       user.email_expire = Date.now() + codeExpiration
-      const mailOpts = parseTemplates({ code: emailCode }).verification
+      const emailLink = newEmailLink({
+        ..._.pick(user, ['user', 'email', 'email_code']),
+        ...fallbackUrls
+      })
+      const mailOpts = parseTemplates({ codelink: emailLink }).verification
       mailOpts.to = userdata.email
       await fastify.mailer.send(mailOpts)
         .catch(e => {
@@ -213,13 +280,19 @@ const handler = function (fastify, opts) {
 
     // save user to database
     return await user.save()
-      .then((u) => createTokenRecord(req, u._doc))
-      .then((t) => res.code(200).send({
-        type: 'success',
-        message: 'User created successfully',
-        data: _.pick(user._doc, userResponseSchema),
-        token: t._doc.token
-      }))
+      .then((u) => {
+        if (u._doc.role === 'admin') return createTokenRecord(req, u._doc)
+        return false
+      })
+      .then((t) => {
+        if (!t) return res.send({ type: 'success', message: 'User created successfully' })
+        return res.code(200).send({
+          type: 'success',
+          message: 'User created successfully',
+          data: _.pick(user._doc, userResponseSchema),
+          token: t._doc.token
+        })
+      })
       .catch((e) => {
         console.log(`${Date.now()} [AUTH] ${e.name}: ${e.message}`)
         return res.code(200).send({
@@ -247,6 +320,8 @@ const handler = function (fastify, opts) {
     // check if password is correct
     const valid = await bcrypt.compare(userdata.pass, user.pass)
     if (!valid) return res.send({ type: 'error', message: 'Invalid credentials' })
+
+    if (user.status === 'pending') return res.send({ type: 'error', message: 'Account is not yet verified. Please check your email' })
 
     // create token
     return await createTokenRecord(req, user._doc)
@@ -412,10 +487,14 @@ const handler = function (fastify, opts) {
     const emailRegex = /^(([^<>()[\]\\.,;:\s@"]+(\.[^<>()[\]\\.,;:\s@"]+)*)|(".+"))@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\])|(([a-zA-Z\-0-9]+\.)+[a-zA-Z]{2,}))$/
 
     // filter request body
-    const userdata = _.pick(req.body, ['name', 'user', 'email', 'phone', 'pass', 'npass'])
+    const data = _.pick(req.body, ['name', 'user', 'email', 'phone', 'pass', 'npass', 'return_url', 'error_url'])
 
     // validate data
-    const data = validateUserUpdate(userdata)
+    const { error } = validateUserUpdate(data)
+    if (error) {
+      console.log('ERROR ERROR ERRRRRRRRR', error)
+      return res.send({ type: 'error', message: 'Invalid data' })
+    }
 
     // parse user request
     const id = req.params.user || req.user._id
@@ -433,12 +512,16 @@ const handler = function (fastify, opts) {
     if (!user) return res.send({ type: 'error', message: 'User not found' })
 
     // check if user is admin or owner of the data
-    if (req.user.role !== 'admin' && user._id !== req.user._id) return res.send({ type: 'error', message: 'You are not allowed to update this user' })
+    if (req.user.role !== 'admin' && String(user._id) !== req.user._id) return res.send({ type: 'error', message: 'You are not allowed to update this user' })
 
     // for admin
     if (req.user.role === 'admin') {
       if (data.user && data.user !== user.user) {
-        const isUserExists = await Users.findOne({ user: data.user })
+        const isUserExists = await Users.findOne({ user: data.user }).catch(e => {
+          console.log(`${Date.now()} [AUTH] ${e.name}: ${e.message}`)
+          return res.send({ type: 'error', message: 'Server Error: Failed to check if user exists.' })
+        })
+        if (res.sent) return res.sent
         if (isUserExists) return res.send({ type: 'error', message: 'User already exists' })
         user.user = data.user
       }
@@ -457,6 +540,19 @@ const handler = function (fastify, opts) {
 
       user.updated_at = Date.now()
     } else if (user.status === 'active') {
+      // change username
+      if (data.user && data.user !== user.user) {
+        const isUserExists = await Users.findOne({ user: data.user })
+          .catch(e => {
+            console.log(`${Date.now()} [AUTH] ${e.name}: ${e.message}`)
+            return res.send({ type: 'error', message: 'Server Error: Failed to check if user exists.' })
+          })
+        if (res.sent) return res.sent
+        if (isUserExists) return res.send({ type: 'error', message: 'User already exists' })
+        user.user = data.user
+      }
+
+      // change name
       user.name = data.name || user.name
 
       // change email
@@ -467,41 +563,40 @@ const handler = function (fastify, opts) {
         user.email_verified = false
         user.email_code = emailCode
         user.email_expire = Date.now() + codeExpiration
-        const mailOpts = parseTemplates({ code: emailCode }).verification
+        const fallbackUrls = _.pick(data, ['return_url', 'error_url'])
+        const emailLink = newEmailLink({
+          ..._.pick(user, ['user', 'email', 'email_code']),
+          ...fallbackUrls
+        })
+        const mailOpts = parseTemplates({ codelink: emailLink }).verification
+        mailOpts.to = user.email
         await fastify.mailer.send(mailOpts)
           .catch((e) => {
             console.log(`${Date.now()} [AUTH] ${e.name}: ${e.message}`)
-            return res.send({ type: 'error', message: 'Server Error: Failed to send email.' })
+            return res.send({ type: 'error', message: 'Server Error: Failed to send email' })
           })
         if (res.sent) return res.sent
       }
 
-      // change phone
-      // if (data.phone) { // not available yet
-      //   user.phone = data.phone
-      //   user.phone_verified = false
-      // }
-
-      // change username
-      if (data.user && data.user !== user.user) {
-        const isUserExists = await Users.findOne({ user: data.user })
-        if (isUserExists) return res.send({ type: 'error', message: 'User already exists' })
-        user.user = data.user
-      }
-
       // change password
-      if (data.npass && data.npass === data.pass) {
+      if (data.pass && data.npass) {
+        if (data.npass === data.pass) return res.send({ type: 'error', message: 'New password cannot be the same as old password' })
         const pass = await bcrypt.compare(user.pass, data.pass)
         if (!pass) return res.send({ type: 'error', message: 'Invalid password' })
         user.pass = await pash(data.npass)
       }
 
       user.updated_at = Date.now()
+    } else {
+      return res.send({ type: 'error', message: 'You are not allowed to update this user' })
     }
 
     // update user data
-    return await Users.findOneAndUpdate(find, data)
-      .then(e => res.send({ type: 'success', message: 'User updated successfully', data: req.user.role === 'admin' ? e._doc : _.pick(e._doc, userResponseSchema) }))
+    return await user.save()
+      .then(e => {
+        console.log(e)
+        return res.send({ type: 'success', message: 'User updated successfully', data: req.user.role === 'admin' ? e._doc : _.pick(e._doc, userResponseSchema) })
+      })
       .catch((e) => {
         console.log(`${Date.now()} [AUTH] ${e.name}: ${e.message}`)
         return res.send({ type: 'error', message: 'Server Error: Failed to update user data.' })
@@ -522,84 +617,16 @@ const handler = function (fastify, opts) {
     if (!user) return res.send({ type: 'error', message: 'User not found' })
 
     // check if user is admin or owner of the data
-    if (req.user.role !== 'admin' && user._id !== req.user._id) return res.send({ type: 'error', message: 'You are not allowed to delete this user' })
+    if (req.user.role !== 'admin' && String(user._id) !== req.user._id) return res.send({ type: 'error', message: 'You are not allowed to delete this user' })
 
     // delete user
     return await Users.deleteOne(find)
       .then(() => res.send({ type: 'success', message: 'User deleted successfully' }))
+      .then(() => Tokens.deleteMany({ user_id: user._id }))
       .catch((e) => {
         console.log(`${Date.now()} [AUTH] ${e.name}: ${e.message}`)
         return res.send({ type: 'error', message: 'Server Error: Failed to delete user data.' })
       })
-  }
-
-  const resendEmail = async (req, res) => {
-    // check if token is valid
-    if (!req.authenticated) return res.send({ type: 'error', message: 'Invalid token' })
-
-    const find = { _id: req.user._id }
-
-    // find user
-    const user = await Users.findOne(find)
-      .catch((e) => {
-        console.log(`${Date.now()} [AUTH] ${e.name}: ${e.message}`)
-        return false
-      })
-    if (!user) return res.send({ type: 'error', message: 'User not found' })
-
-    // check if email_expiration is expired
-    if (user.email_verified) return res.send({ type: 'error', message: 'Email already verified' })
-    if (user.email_expiration < Date.now()) return res.send({ type: 'error', message: 'Email verification code has been sent already, wait for an hour before re-sending again.' })
-
-    // email regex
-    const emailRegex = /^(([^<>()[\]\\.,;:\s@"]+(\.[^<>()[\]\\.,;:\s@"]+)*)|(".+"))@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}])|(([a-zA-Z\-0-9]+\.)+[a-zA-Z]{2,}))$/
-    if (user.email && String(user.email).match(emailRegex)) {
-      const emailCode = usid.uid()
-      user.email_code = emailCode
-      user.email_expiration = Date.now() + codeExpiration
-
-      const mailOpts = parseTemplates({ code: emailCode }).verification
-      await fastify.mailer.send(mailOpts)
-        .catch((e) => {
-          console.log(`${Date.now()} [AUTH] ${e.name}: ${e.message}`)
-          return res.send({ type: 'error', message: 'Server Error: Failed to send email.' })
-        })
-
-      if (res.sent) return res.sent
-
-      return await user.save()
-        .then(() => res.send({ type: 'success', message: 'Email verification code has been sent successfully.' }))
-        .catch((e) => {
-          console.log(`${Date.now()} [AUTH] ${e.name}: ${e.message}`)
-          return res.send({ type: 'error', message: 'Server Error: Failed to update user data.' })
-        })
-    } else return res.send({ type: 'error', message: 'Invalid email address' })
-  }
-
-  const verifyEmail = async (req, res) => {
-    // vcheck if valid token
-    if (!req.authenticated) return res.send({ type: 'error', message: 'Invalid token' })
-
-    // filter data
-    const data = _.pick(req.body, ['code', 'email'])
-    const find = { _id: req.user._id }
-
-    // check if user exists
-    const user = await Users.findOne(find)
-    if (!user) return res.send({ type: 'error', message: 'User not found' })
-
-    // check if valid code
-    if (user.email_code === data.code && user.email === data.email) {
-      // check if expired email_expiration
-      if (Date.now() > user.email_expire) return res.send({ type: 'error', message: 'Email verification code has expired' })
-      user.email_verified = true
-      return await user.save()
-        .then(() => res.send({ type: 'success', message: 'Email verified successfully' }))
-        .catch((e) => {
-          console.log(`${Date.now()} [AUTH] ${e.name}: ${e.message}`)
-          return res.send({ type: 'error', message: 'Server Error: Failed to verify email.' })
-        })
-    } else return res.send({ type: 'error', message: 'Invalid email verification code' })
   }
 
   return {
@@ -615,8 +642,7 @@ const handler = function (fastify, opts) {
     reads,
     update,
     delete: remove,
-    verifyEmail,
-    resendEmail
+    verifyEmailLink
   }
 }
 
