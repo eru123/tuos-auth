@@ -25,7 +25,7 @@ const options = {
     // for email verification
     api_url: 'http://localhost:8080', // url where your api is hosted
     client_url: 'http://localhost:3000', // your web app url, this will be used as fallback url
-    code_expiration: '1800000', // default
+    link_expiration: '1800000', // default
 
     // for templating emails
     mailer: {
