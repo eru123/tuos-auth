@@ -20,6 +20,8 @@ const plugin = async function (fastify, opts, done) {
 
   // User
   fastify.get('/api/user', h.read)
+  fastify.post('/api/user/check', h.checkUser)
+  fastify.get('/api/user/check/:user', h.checkUser)
   fastify.get('/api/user/:user', h.read)
   fastify.get('/api/users', h.reads)
   fastify.get('/api/users/:page', h.reads)

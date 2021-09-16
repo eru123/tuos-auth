@@ -5,41 +5,82 @@ const bcrypt = require('bcrypt')
 const passwordComplexity = require('joi-password-complexity')
 const USID = require('usid')
 const usid = new USID()
-const rawTemplates = {
-  verification: require('./mailer.verification')
-}
-
 const handler = function (fastify, opts) {
   const Users = fastify.mongoose.models.Users
   const Tokens = fastify.mongoose.models.Tokens
   const options = opts.auth || (() => { console.log('[PLUGIN] auth: Using default auth options'); return {} })()
-  const codeExpiration = Number(options.code_expiration) || 1800000
-  const apiUrl = options.api_url || 'http://localhost:8080'
-  const clientUrl = options.client_url || ''
-  const app = { ...options, ...opts.app }
+  const linkExpiration = Number(options.link_expiration) || 1800000
+  const apiUrl = options.api_url
+  const clientUrl = options.client_url
+  const app = { ...opts.app }
+  const mailer = options.mailer || {}
+
+  const findUser = (user) => {
+    user = String(user)
+    const emailRegex = /^(([^<>()[\]\\.,;:\s@"]+(\.[^<>()[\]\\.,;:\s@"]+)*)|(".+"))@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\])|(([a-zA-Z\-0-9]+\.)+[a-zA-Z]{2,}))$/
+    const _idRegex = /^[0-9a-fA-F]{24}$/
+    if (user.match(_idRegex)) return { _id: user }
+    if (user.match(emailRegex)) return { email: user }
+    return { user }
+  }
 
   // parsing mail templates
   const parseTemplates = (add) => {
-    const pops = { ...app, ...add }
-    const parsed = {}
-    for (const rkey in rawTemplates) {
-      parsed[rkey] = {}
-      for (const key in rawTemplates[rkey]) {
-        let text = String(rawTemplates[rkey][key])
-        if (key === 'text') {
-          text += `\nCode is only available for ${codeExpiration / 60 / 1000} mins.\n\nBest regards,\nTuos Team`
-        } else if (key === 'html') {
-          text += `<br /><b>Code is only available for ${codeExpiration / 60 / 1000} mins.</b><br /><br />Best regards,<br />Tuos Team`
-        }
-        text = text.replace(/::appname::/g, pops.name || 'Tuos')
-        text = text.replace(/::appkey::/g, pops.name || 'tuos')
-        text = text.replace(/::codelink::/g, pops.codelink || '<InvalidLink>')
-        text = text.replace(/::code::/g, pops.code || 'tuos')
+    const parseKeys = (prefix, obj) => {
+      const r = {}
+      for (const k in obj) r[`${prefix}${k}`] = obj[k]
+      return r
+    }
 
-        parsed[rkey][key] = text
+    const pk = {
+      ...parseKeys('app', app),
+      ...parseKeys('user', add.user),
+      ...parseKeys('code', add.code)
+    }
+
+    const rtd = {
+      email_verification: {
+        subject: '::appname:: - Email verification',
+        text: 'Hi there ::username::! here is your email verification link: ::codelink::\n\nIf you did not request any verification link from ::appname:: please ignore this email.',
+        html: '<html><h1>::appname:: email verification</h1><h3>Hi there ::username::! here is your email verification link: <a href="::codelink::">Click here</a></h3><hr /><p>If you did not request any verification code from ::appname:: please ignore this email.</p></html>'
+      },
+      forgot_password: {
+        subject: '::appname:: - Forgot password',
+        text: 'Hi there ::username::! here is your reset password link: ::codelink::\n\nIf you did not request any reset password link from ::appname:: please ignore this email.',
+        html: '<html><h1>::appname:: reset password link</h1><h3>Hi there ::username::! here is your reset password link: <a href="::codelink::">Click here</a></h3><hr /><p>If you did not request any reset password link from ::appname:: please ignore this email.</p></html>'
       }
     }
-    return parsed
+
+    const vars = mailer.vars || [
+      {
+        name: 'appname',
+        find: /::appname::/g
+      },
+      {
+        name: 'codelink',
+        find: /::codelink::/g
+      },
+      {
+        name: 'username',
+        find: /::username::/g
+      }
+    ]
+
+    const rt = mailer.templates || rtd
+
+    const r = {}
+    for (const k in rt) {
+      r[k] = {}
+      for (const kk in rt[k]) {
+        let t = String(rt[k][kk])
+        vars.forEach(v => {
+          t = typeof pk[v.name] === 'string' ? t.replace(v.find, pk[v.name]) : v.default || ''
+        })
+        r[k][kk] = t
+      }
+    }
+
+    return r
   }
 
   // create a new token
@@ -50,8 +91,27 @@ const handler = function (fastify, opts) {
     const data = _.pick(payload, ['user', 'email', 'email_code'])
     data.return_url = payload.return_url || ''
     data.error_url = payload.error_url || ''
-    const token = String(fastify.jwt.sign(payload))
+    const token = String(fastify.jwt.sign(data))
     return `${apiUrl}/api/auth/email?token=${token}`
+  }
+
+  // for checking if user exists or not
+  const checkUser = async (req, res) => {
+    try {
+      let find
+      if (typeof req.params === 'object' && req.params.user) {
+        find = findUser(req.params.user)
+      } else if (typeof req.body === 'object' && req.body.user) {
+        find = findUser(req.body.user)
+      } else throw new Error('user parameter is missing')
+
+      return await Users.findOne(find)
+        .then(() => res.send({ type: 'success', message: 'User found' }))
+        .catch(() => res.send({ type: 'error', message: 'User not found' }))
+    } catch (e) {
+      console.log(`${Date.now()} [AUTH] ${e.name}: ${e.message}`)
+      res.send({ type: 'error', message: 'Invalid request' })
+    }
   }
 
   // verify email link
@@ -62,10 +122,13 @@ const handler = function (fastify, opts) {
       const user = await Users.findOne(_.pick(payload, ['user', 'email', 'email_code'])).catch(() => false)
 
       const errFallback = (f = 0) => {
+        console.log(payload)
         if (payload.error_url) {
           return res.redirect(payload.error_url)
         } else if (f === 1) {
           return res.send('SERVER ERROR')
+        } else if (clientUrl) {
+          return res.redirect(clientUrl)
         } else {
           return res.send('INVALID TOKEN')
         }
@@ -231,18 +294,18 @@ const handler = function (fastify, opts) {
     const fallbackUrls = _.pick(req.body, ['return_url', 'client_url'])
 
     // validate the request
-    const { error } = validateUserRegistration(req.body)
+    const { error } = validateUserRegistration(userdata)
     if (error) return res.send({ type: 'error', message: error.details[0].message })
 
     // check if username or email is already registered
-    let user = await Users.findOne({ user: userdata.user })
+    let user = await Users.findOne({ $or: [{ user: userdata.user }, { email: userdata.email }] })
       .catch(e => {
         console.log(`${Date.now()} [AUTH] ${e.name}: ${e.message}`)
-        return res.send({ type: 'error', message: 'Username is already taken' })
+        return res.send({ type: 'error', message: 'Username or email is already taken' })
       })
 
     if (res.sent) return res.sent
-    if (user) return res.send({ type: 'error', message: 'Username is already taken' })
+    if (user) return res.send({ type: 'error', message: 'Username or email is already taken' })
 
     // get current timestamp
     const tstamp = Date.now()
@@ -251,7 +314,6 @@ const handler = function (fastify, opts) {
     // create user object from User model
     user = new Users(userdata)
     user.pass = await pash(user.pass)
-    // user.phone_verified = false // not available yet
     user.email_verified = false
     user.role = isFirst ? 'admin' : 'user'
     user.status = 'pending'
@@ -261,13 +323,14 @@ const handler = function (fastify, opts) {
     // send email verification
     if (userdata.email) {
       const emailCode = usid.uid()
+      const expiration = Date.now() + linkExpiration
       user.email_code = emailCode
-      user.email_expire = Date.now() + codeExpiration
-      const emailLink = newEmailLink({
+      user.email_expire = expiration
+      const link = newEmailLink({
         ..._.pick(user, ['user', 'email', 'email_code']),
         ...fallbackUrls
       })
-      const mailOpts = parseTemplates({ codelink: emailLink }).verification
+      const mailOpts = parseTemplates({ user: _.pick(user, userResponseSchema), code: { link, expiration } }).email_verification
       mailOpts.to = userdata.email
       await fastify.mailer.send(mailOpts)
         .catch(e => {
@@ -430,12 +493,9 @@ const handler = function (fastify, opts) {
     // check if token is valid
     if (!req.authenticated) return res.send({ type: 'error', message: 'Invalid token' })
 
-    // email regex
-    const emailRegex = /^(([^<>()[\]\\.,;:\s@"]+(\.[^<>()[\]\\.,;:\s@"]+)*)|(".+"))@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\])|(([a-zA-Z\-0-9]+\.)+[a-zA-Z]{2,}))$/
-
     // parse user request
-    const id = req.params.user || req.user._id
-    const find = id.match(/^[0-9a-fA-F]{24}$/) ? { _id: id } : id.match(emailRegex) ? { email: id } : { user: id }
+    const id = req.params.id || req.user._id
+    const find = findUser(id)
 
     // get user data
     const user = await Users.findOne(find)
@@ -484,9 +544,6 @@ const handler = function (fastify, opts) {
     // check if token is valid
     if (!req.authenticated) return res.send({ type: 'error', message: 'Invalid token' })
 
-    // email regex
-    const emailRegex = /^(([^<>()[\]\\.,;:\s@"]+(\.[^<>()[\]\\.,;:\s@"]+)*)|(".+"))@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\])|(([a-zA-Z\-0-9]+\.)+[a-zA-Z]{2,}))$/
-
     // filter request body
     const data = _.pick(req.body, ['name', 'user', 'email', 'phone', 'pass', 'npass', 'return_url', 'error_url'])
 
@@ -499,7 +556,7 @@ const handler = function (fastify, opts) {
 
     // parse user request
     const id = req.params.user || req.user._id
-    const find = id.match(/^[0-9a-fA-F]{24}$/) ? { _id: id } : id.match(emailRegex) ? { email: id } : { user: id }
+    const find = findUser(id)
 
     // get user data
     const user = await Users.findOne(find)
@@ -560,16 +617,18 @@ const handler = function (fastify, opts) {
       if (data.email && data.email !== user.email) {
         if (Number(user.email_expire) > Date.now()) return res.send({ type: 'error', message: `You need to wait for ${Number(user.email_expire) / 1000 / 60} mins before changing recovery email` })
         const emailCode = usid.uid()
+        const expiration = Date.now() + linkExpiration
         user.email = data.email
         user.email_verified = false
         user.email_code = emailCode
-        user.email_expire = Date.now() + codeExpiration
+        user.email_expire = expiration
         const fallbackUrls = _.pick(data, ['return_url', 'error_url'])
-        const emailLink = newEmailLink({
+        const link = newEmailLink({
           ..._.pick(user, ['user', 'email', 'email_code']),
           ...fallbackUrls
         })
-        const mailOpts = parseTemplates({ codelink: emailLink }).verification
+        const mailOpts = parseTemplates({ user: _.pick(user, userResponseSchema), code: { link, expiration } }).email_verification
+        // const mailOpts = parseTemplates({ codelink: emailLink }).verification
         mailOpts.to = user.email
         await fastify.mailer.send(mailOpts)
           .catch((e) => {
@@ -611,7 +670,7 @@ const handler = function (fastify, opts) {
 
     // get id
     const id = req.params.user || req.user._id
-    const find = id.match(/^[0-9a-fA-F]{24}$/) ? { _id: id } : { user: id }
+    const find = findUser(id)
 
     // find user
     const user = await Users.findOne(find)
@@ -643,7 +702,8 @@ const handler = function (fastify, opts) {
     reads,
     update,
     delete: remove,
-    verifyEmailLink
+    verifyEmailLink,
+    checkUser
   }
 }
 

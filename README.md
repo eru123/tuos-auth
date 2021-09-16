@@ -25,7 +25,38 @@ const options = {
     // for email verification
     api_url: 'http://localhost:8080', // url where your api is hosted
     client_url: 'http://localhost:3000', // your web app url, this will be used as fallback url
-    code_expiration: '1800000' // default
+    code_expiration: '1800000', // default
+
+    // for templating emails
+    mailer: {
+      vars: [
+        {
+          name: 'appname', // variable name
+          find: /::appname::/g, // string or regex
+          default: 'Tuos' // fallback value if var Boolean(vars[n].name) is false
+        },
+        {
+          name: 'codelink',
+          find: /::codelink::/g
+        },
+        {
+          name: 'username',
+          find: /::username::/g
+        }
+      ],
+      templates: {
+        email_verification: {
+          subject: '::appname:: - Email verification',
+          text: 'Hi there ::username::! here is your email verification link: ::codelink::\n\nIf you did not request any verification link from ::appname:: please ignore this email.',
+          html: '<html><h1>::appname:: email verification</h1><h3>Hi there ::username::! here is your email verification link: <a href="::codelink::">Click here</a></h3><hr /><p>If you did not request any verification code from ::appname:: please ignore this email.</p></html>'
+        },
+        forgot_password: {
+          subject: '::appname:: - Forgot password',
+          text: 'Hi there ::username::! here is your reset password link: ::codelink::\n\nIf you did not request any reset password link from ::appname:: please ignore this email.',
+          html: '<html><h1>::appname:: reset password link</h1><h3>Hi there ::username::! here is your reset password link: <a href="::codelink::">Click here</a></h3><hr /><p>If you did not request any reset password link from ::appname:: please ignore this email.</p></html>'
+        }
+      }
+    }
   },
   mailer: {
     // see https://nodemailer.com/
