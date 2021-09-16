@@ -11,6 +11,7 @@ const handler = function (fastify, opts) {
   const options = opts.auth || (() => { console.log('[PLUGIN] auth: Using default auth options'); return {} })()
   const linkExpiration = Number(options.link_expiration) || 1800000
   const apiUrl = options.api_url
+  const apiBase = opts.app.auth_bpp
   const clientUrl = options.client_url
   const app = { ...opts.app }
   const mailer = options.mailer || {}
@@ -92,7 +93,7 @@ const handler = function (fastify, opts) {
     data.return_url = payload.return_url || ''
     data.error_url = payload.error_url || ''
     const token = String(fastify.jwt.sign(data))
-    return `${apiUrl}/api/auth/email?token=${token}`
+    return `${apiUrl + apiBase}/auth/email?token=${token}`
   }
 
   // for checking if user exists or not
@@ -106,8 +107,14 @@ const handler = function (fastify, opts) {
       } else throw new Error('user parameter is missing')
 
       return await Users.findOne(find)
-        .then(() => res.send({ type: 'success', message: 'User found' }))
-        .catch(() => res.send({ type: 'error', message: 'User not found' }))
+        .then(e => {
+          if (e) return res.send({ type: 'success', message: 'User found' })
+          return res.send({ type: 'error', message: 'User not found' })
+        })
+        .catch((e) => {
+          console.log(`${Date.now()} [AUTH] ${e.name}: ${e.message}`)
+          res.send({ type: 'error', message: 'Server error: failed to find user' })
+        })
     } catch (e) {
       console.log(`${Date.now()} [AUTH] ${e.name}: ${e.message}`)
       res.send({ type: 'error', message: 'Invalid request' })
@@ -167,6 +174,26 @@ const handler = function (fastify, opts) {
     }
   }
 
+  // const newForgotPasswordLink = (payload) => {
+  //   const find = findUser(payload.user)
+  //   const pass = payload.pass
+  //   find.return_url = payload.return_url || ''
+  //   find.error_url = payload.error_url || ''
+  //   const token = String(fastify.jwt.sign({ ...find, pass }))
+  //   return `${apiUrl}/api/auth/password?token=${token}`
+  // }
+
+  // const forgotPassword = async (req, res) => {
+  //   const data = _.pick(req.body, ['user', 'pass'])
+  //   const codelink = newForgotPasswordLink(data)
+  // }
+
+  // const verifyForgotPasswordLink = async (req, res) => {
+
+  // }
+
+  //
+
   // create current user token record
   const createTokenRecord = async (req, payload) => {
     const tstamp = Date.now()
@@ -216,6 +243,7 @@ const handler = function (fastify, opts) {
     'updated_at',
     'role',
     'status',
+    'data',
     '__v'
   ]
 
@@ -223,6 +251,7 @@ const handler = function (fastify, opts) {
     '_id',
     'name',
     'user',
+    'data',
     'created_at'
   ]
 
@@ -291,6 +320,7 @@ const handler = function (fastify, opts) {
   const create = async function (req, res) {
     // filter request body
     const userdata = _.pick(req.body, ['name', 'user', 'email', 'pass'])
+    const addData = typeof req.body.data === 'object' ? req.body.data : {}
     const fallbackUrls = _.pick(req.body, ['return_url', 'client_url'])
 
     // validate the request
@@ -317,6 +347,7 @@ const handler = function (fastify, opts) {
     user.email_verified = false
     user.role = isFirst ? 'admin' : 'user'
     user.status = 'pending'
+    user.data = addData
     user.created_at = tstamp
     user.updated_at = tstamp
 
@@ -545,7 +576,7 @@ const handler = function (fastify, opts) {
     if (!req.authenticated) return res.send({ type: 'error', message: 'Invalid token' })
 
     // filter request body
-    const data = _.pick(req.body, ['name', 'user', 'email', 'phone', 'pass', 'npass', 'return_url', 'error_url'])
+    const data = _.pick(req.body, ['name', 'user', 'email', 'phone', 'pass', 'npass', 'data', 'return_url', 'error_url'])
 
     // validate data
     const { error } = validateUserUpdate(data)
@@ -650,6 +681,8 @@ const handler = function (fastify, opts) {
     } else {
       return res.send({ type: 'error', message: 'You are not allowed to update this user' })
     }
+
+    user.data = { ...user.data, ...data.data || {} }
 
     // update user data
     return await user.save()
