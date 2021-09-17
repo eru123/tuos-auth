@@ -87,6 +87,56 @@ const handler = function (fastify, opts) {
   // create a new token
   const newJWTToken = (payload) => String(fastify.jwt.sign({ ..._.pick(payload, (['_id', 'name', 'user', 'role'])) }))
 
+  // validate data for registration
+  const validateUserRegistration = (user) => {
+    const schema = Joi.object({
+      name: Joi.string().min(3).max(255).required(),
+      user: Joi.string().alphanum().min(3).max(30).required(),
+      email: Joi.string().email().required(),
+      pass: passwordComplexity(complexityOptions).required(),
+      phone: Phone.string().phoneNumber()
+    })
+    return schema.validate(user)
+  }
+
+  // validate data for update
+  const validateUserUpdate = (user) => {
+    const schema = Joi.object({
+      name: Joi.string().min(3).max(255),
+      user: Joi.string().alphanum().min(3).max(30),
+      email: Joi.string().email(),
+      pass: passwordComplexity(complexityOptions),
+      npass: passwordComplexity(complexityOptions),
+      phone: Phone.string().phoneNumber()
+    })
+    return schema.validate(user)
+  }
+
+  const validateAdditionalData = (data) => {
+    if (typeof data !== 'object' || Array.isArray(data)) return 'Data field must an object'
+    for (const k in data) {
+      if (typeof k !== 'string' || typeof data[k] !== 'string') {
+        return 'key in data[key] must be a string'
+      }
+    }
+
+    // returns false if valid
+    return false
+  }
+
+  // hash the password
+  async function pash (pass) {
+    const salt = await bcrypt.genSalt(10)
+    const hashed = await bcrypt.hash(pass, salt)
+    return hashed
+  }
+
+  // check if mongodb has a registered user
+  const hasUser = async () => {
+    const user = await Users.find({}).limit(1)
+    return !!user
+  }
+
   // create verification email link
   const newEmailLink = (payload) => {
     const data = _.pick(payload, ['user', 'email', 'email_code'])
@@ -129,7 +179,6 @@ const handler = function (fastify, opts) {
       const user = await Users.findOne(_.pick(payload, ['user', 'email', 'email_code'])).catch(() => false)
 
       const errFallback = (f = 0) => {
-        console.log(payload)
         if (payload.error_url) {
           return res.redirect(payload.error_url)
         } else if (f === 1) {
@@ -174,25 +223,115 @@ const handler = function (fastify, opts) {
     }
   }
 
-  // const newForgotPasswordLink = (payload) => {
-  //   const find = findUser(payload.user)
-  //   const pass = payload.pass
-  //   find.return_url = payload.return_url || ''
-  //   find.error_url = payload.error_url || ''
-  //   const token = String(fastify.jwt.sign({ ...find, pass }))
-  //   return `${apiUrl}/api/auth/password?token=${token}`
-  // }
+  const newForgotPasswordLink = (payload) => {
+    const { pass, code, _id } = payload
+    const fallb = _.pick(payload, ['error_url', 'return_url'])
+    const token = String(fastify.jwt.sign({ pass, code, _id, ...fallb }))
+    return `${apiUrl + apiBase}/auth/password?token=${token}`
+  }
 
-  // const forgotPassword = async (req, res) => {
-  //   const data = _.pick(req.body, ['user', 'pass'])
-  //   const codelink = newForgotPasswordLink(data)
-  // }
+  const forgotPassword = async (req, res) => {
+    const body = _.pick(req.body, ['user', 'pass'])
+    const find = findUser(body.user)
 
-  // const verifyForgotPasswordLink = async (req, res) => {
+    const { error } = validateUserUpdate({ pass: body.pass })
+    if (error) return res.send({ type: 'error', message: error.details[0].message })
 
-  // }
+    const user = await Users.findOne(find)
+      .catch(e => {
+        console.log(`${Date.now()} [AUTH] ${e.name}: ${e.message}`)
+        return res.send({ type: 'error', message: 'Server error: failed to find user' })
+      })
 
-  //
+    if (res.sent) return res.sent
+    if (!user) return res.send({ type: 'error', message: 'User not found' })
+
+    const code = usid.uid()
+    const expiration = Date.now() + linkExpiration
+
+    user.cont = user.cont || {}
+    user.cont = {
+      ...user.cont,
+      forgot_password: { code, expiration }
+    }
+
+    const data = {
+      _id: user._id,
+      code,
+      pass: body.pass
+    }
+
+    const fallbackUrls = _.pick(req.body, ['return_url', 'error_url'])
+    const link = newForgotPasswordLink({
+      ...data,
+      ...fallbackUrls
+    })
+
+    const mailOpts = parseTemplates({ user: _.pick(user, userResponseSchema), code: { link, expiration } }).forgot_password
+    mailOpts.to = user.email
+    await fastify.mailer.send(mailOpts)
+      .catch((e) => {
+        console.log(`${Date.now()} [AUTH] ${e.name}: ${e.message}`)
+        return res.send({ type: 'error', message: 'Server Error: Failed to send email' })
+      })
+    if (res.sent) return res.sent
+
+    return await user.save()
+      .then(() => res.send({ type: 'success', message: 'Email sent' }))
+      .catch((e) => {
+        console.log(`${Date.now()} [AUTH] ${e.name}: ${e.message}`)
+        return res.send({ type: 'error', message: 'Server Error: Failed to save in database' })
+      })
+  }
+
+  const verifyForgotPassword = async (req, res) => {
+    try {
+      const token = req.query.token
+      const { _id, code, pass } = fastify.jwt.verify(token)
+      const fallb = _.pick(req.body, ['return_url', 'error_url'])
+      const errFallback = (f = 0) => {
+        if (fallb.error_url) {
+          return res.redirect(fallb.error_url)
+        } else if (f === 1) {
+          return res.send('SERVER ERROR')
+        } else if (clientUrl) {
+          return res.redirect(clientUrl)
+        } else {
+          return res.send('INVALID TOKEN')
+        }
+      }
+
+      const user = await Users.findOne({ _id }).catch(() => false)
+
+      if (!user) return errFallback()
+      if (user.email_verified && user.status === 'active' && typeof user.cont.forgot_password === 'object') {
+        if (user.cont.forgot_password.code === code && Number(user.cont.forgot_password.expiration) > Date.now()) {
+          user.pass = await pash(pass)
+          user.cont.forgot_password = {}
+          await user.save()
+            .then(() => {
+              if (fallb.return_url) {
+                return res.redirect(fallb.return_url)
+              } else if (clientUrl) {
+                return res.redirect(clientUrl)
+              } else {
+                return res.send('OK')
+              }
+            })
+            .catch((e) => {
+              console.log(`${Date.now()} [AUTH] ${e.name}: ${e.message}`)
+              return errFallback(1)
+            })
+          if (res.sent) return res.sent
+        } else {
+          return errFallback()
+        }
+      } else return errFallback()
+    } catch (e) {
+      console.log(`${Date.now()} [AUTH] ${e.name}: ${e.message}`)
+      return res.send('INVALID LINK')
+    }
+  }
 
   // create current user token record
   const createTokenRecord = async (req, payload) => {
@@ -278,50 +417,15 @@ const handler = function (fastify, opts) {
     requirementCount: 4
   }
 
-  // validate data for registration
-  const validateUserRegistration = (user) => {
-    const schema = Joi.object({
-      name: Joi.string().min(3).max(255).required(),
-      user: Joi.string().alphanum().min(3).max(30).required(),
-      email: Joi.string().email().required(),
-      pass: passwordComplexity(complexityOptions).required(),
-      phone: Phone.string().phoneNumber()
-    })
-    return schema.validate(user)
-  }
-
-  // validate data for update
-  const validateUserUpdate = (user) => {
-    const schema = Joi.object({
-      name: Joi.string().min(3).max(255),
-      user: Joi.string().alphanum().min(3).max(30),
-      email: Joi.string().email(),
-      pass: passwordComplexity(complexityOptions),
-      npass: passwordComplexity(complexityOptions),
-      phone: Phone.string().phoneNumber()
-    })
-    return schema.validate(user)
-  }
-
-  // hash the password
-  async function pash (pass) {
-    const salt = await bcrypt.genSalt(10)
-    const hashed = await bcrypt.hash(pass, salt)
-    return hashed
-  }
-
-  // check if mongodb has a registered user
-  const hasUser = async () => {
-    const user = await Users.find({}).limit(1)
-    return !!user
-  }
-
   // create user
   const create = async function (req, res) {
     // filter request body
     const userdata = _.pick(req.body, ['name', 'user', 'email', 'pass'])
     const addData = typeof req.body.data === 'object' ? req.body.data : {}
     const fallbackUrls = _.pick(req.body, ['return_url', 'client_url'])
+
+    const addDataError = validateAdditionalData(addData)
+    if (addDataError) return res.send({ type: 'error', message: addDataError })
 
     // validate the request
     const { error } = validateUserRegistration(userdata)
@@ -348,6 +452,7 @@ const handler = function (fastify, opts) {
     user.role = isFirst ? 'admin' : 'user'
     user.status = 'pending'
     user.data = addData
+    user.cont = {}
     user.created_at = tstamp
     user.updated_at = tstamp
 
@@ -659,7 +764,6 @@ const handler = function (fastify, opts) {
           ...fallbackUrls
         })
         const mailOpts = parseTemplates({ user: _.pick(user, userResponseSchema), code: { link, expiration } }).email_verification
-        // const mailOpts = parseTemplates({ codelink: emailLink }).verification
         mailOpts.to = user.email
         await fastify.mailer.send(mailOpts)
           .catch((e) => {
@@ -681,6 +785,9 @@ const handler = function (fastify, opts) {
     } else {
       return res.send({ type: 'error', message: 'You are not allowed to update this user' })
     }
+
+    const addDataError = validateAdditionalData(data.data)
+    if (addDataError) return res.send({ type: 'error', message: addDataError })
 
     user.data = { ...user.data, ...data.data || {} }
 
@@ -707,6 +814,11 @@ const handler = function (fastify, opts) {
 
     // find user
     const user = await Users.findOne(find)
+      .catch(e => {
+        console.log(`${Date.now()} [AUTH] ${e.name}: ${e.message}`)
+        return res.send({ type: 'error', message: 'Server Error: User not found' })
+      })
+    if (res.sent) return res.sent
     if (!user) return res.send({ type: 'error', message: 'User not found' })
 
     // check if user is admin or owner of the data
@@ -715,11 +827,16 @@ const handler = function (fastify, opts) {
     // delete user
     return await Users.deleteOne(find)
       .then(() => res.send({ type: 'success', message: 'User deleted successfully' }))
-      .then(() => Tokens.deleteMany({ user_id: user._id }))
       .catch((e) => {
         console.log(`${Date.now()} [AUTH] ${e.name}: ${e.message}`)
         return res.send({ type: 'error', message: 'Server Error: Failed to delete user data.' })
       })
+      .then(async () => {
+        await Tokens.deleteMany({ user_id: String(user._id) })
+        if (!res.sent) return res.send({ type: 'success', message: 'User deleted successfully' })
+      })
+      .catch(e => console.log(`${Date.now()} [AUTH] ${e.name}: ${e.message}`))
+      .finally(() => res.sent)
   }
 
   return {
@@ -736,7 +853,9 @@ const handler = function (fastify, opts) {
     update,
     delete: remove,
     verifyEmailLink,
-    checkUser
+    checkUser,
+    forgotPassword,
+    verifyForgotPassword
   }
 }
 
