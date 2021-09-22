@@ -19,7 +19,10 @@ const options = {
     connect: 'mongodb://localhost:27017/tuos' 
   },
   jwt: {
-    secret_token: '<your_secret_token>'
+    secret: '<your_secret_token>',
+    sign: {
+      expiresIn: '7d'
+    }
   },
   auth: {
     // for email verification

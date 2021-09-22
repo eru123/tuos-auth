@@ -8,28 +8,29 @@ const plugin = async function (fastify, opts, done) {
     console.log('[PLUGIN] jwt: Using default secret_token')
     return defaultOpts
   })()
-  const secretToken = options.secret_token
-
-  await fastify.register(require('fastify-jwt'), { secret: secretToken })
+  await fastify.register(require('fastify-jwt'), options)
 
   fastify.decorateRequest('authenticated', false)
   fastify.decorateRequest('token', null)
 
-  const prepareAuth = async (req, res) => {
+  const prepareAuth = async (req) => {
     try {
       const token = String(req.headers.authorization).split(' ')[1]
       if (!token) { return }
       req.token = token
 
-      const userId = fastify.jwt.decode(token)._id
-      const record = await Tokens.findOne({ user_id: userId, token })
-      if (record) {
-        fastify.jwt.verify(token, null, (err, decoded) => {
-          if (!err) {
-            req.authenticated = true
-            req.user = decoded
-          } else console.log(`[JWT] ${err.name}: ${err.message}`)
-        })
+      const preDecoded = fastify.jwt.decode(token)
+      if (typeof preDecoded === 'object' && preDecoded && '_id' in preDecoded) {
+        const userId = preDecoded._id
+        const record = await Tokens.findOne({ user_id: userId, token })
+        if (record) {
+          fastify.jwt.verify(token, null, (err, decoded) => {
+            if (!err) {
+              req.authenticated = true
+              req.user = decoded
+            } else console.log(`[JWT] ${err.name}: ${err.message}`)
+          })
+        }
       }
     } catch (e) {
       console.log(`[JWT] ${e.name}: ${e.message}`)

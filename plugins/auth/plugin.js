@@ -13,6 +13,7 @@ const plugin = async function (fastify, opts, done) {
   fastify.post(`${api}/auth/register`, h.create)
   fastify.post(`${api}/auth/login`, h.login)
   fastify.post(`${api}/auth/password`, h.forgotPassword)
+  fastify.post(`${api}/auth/token`, h.renewToken)
   fastify.get(`${api}/auth/password`, h.verifyForgotPassword)
   fastify.get(`${api}/auth/email`, h.verifyEmailLink)
   fastify.delete(`${api}/auth/logout`, h.logout)

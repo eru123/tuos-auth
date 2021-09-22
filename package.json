@@ -1,6 +1,6 @@
 {
   "name": "tuos-auth",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "description": "Tuos authentication plugin",
   "main": "index.js",
   "repository": "https://github.com/eru123/tuos-auth",
